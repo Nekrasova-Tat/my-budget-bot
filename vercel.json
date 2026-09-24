@@ -1,7 +1,8 @@
+
 {
   "functions": {
     "api/bot.py": {
-      "runtime": "@vercel/python@4.6.0"
+      "runtime": "@vercel/python"
     }
   }
 }
