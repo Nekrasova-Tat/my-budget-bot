@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 
@@ -71,10 +71,18 @@ def save_entry(user, state):
     sheet_name = SHEET_EXPENSES if state['type'] == 'expense' else SHEET_INCOMES
     ws = get_sheet().worksheet(sheet_name)
     headers = ws.row_values(1)
+
+    # Преобразуем дату в объект date, чтобы Google Таблицы распознали её как дату
+    date_str = state.get('date')
+    if date_str:
+        date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+    else:
+        date_obj = date.today()
+
     data = {
         'Telegram ID': user.id,
         'Username': '@' + user.username if user.username else '',
-        'Дата': state.get('date') or datetime.now().strftime('%Y-%m-%d'),
+        'Дата': date_obj.strftime('%d.%m.%Y'),
         'Название': state.get('name', ''),
         'Категория': state.get('category', ''),
         'Подкатегория': state.get('subcategory', ''),
@@ -82,7 +90,9 @@ def save_entry(user, state):
         'Комментарии': state.get('comment', '')
     }
     row = [str(data.get(h.strip(), '')) for h in headers]
-    ws.append_row(row)
+
+    # USER_ENTERED — Google сам распарсит дату
+    ws.append_row(row, value_input_option='USER_ENTERED')
 
 # ================== КЛАВИАТУРА С ДАТАМИ ==================
 def date_keyboard():
