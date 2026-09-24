@@ -1,5 +1,6 @@
 import os
 import json
+from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 
@@ -17,6 +18,8 @@ SHEET_NAME = 'Бюджет'
 SHEET_EXPENSES = 'Расходы'
 SHEET_INCOMES = 'Доходы'
 SHEET_CATEGORIES = 'Категории'
+
+WEBHOOK_URL = 'https://my-budget-bot-mu.vercel.app/api/bot'
 
 # ================== GOOGLE SHEETS ==================
 def get_sheet():
@@ -71,7 +74,7 @@ def save_entry(user, state):
     data = {
         'Telegram ID': user.id,
         'Username': '@' + user.username if user.username else '',
-        'Дата': state.get('date', ''),
+        'Дата': state.get('date') or datetime.now().strftime('%d.%m.%Y'),
         'Название': state.get('name', ''),
         'Категория': state.get('category', ''),
         'Подкатегория': state.get('subcategory', ''),
@@ -81,8 +84,24 @@ def save_entry(user, state):
     row = [str(data.get(h.strip(), '')) for h in headers]
     ws.append_row(row)
 
+# ================== КЛАВИАТУРА С ДАТАМИ ==================
+def date_keyboard():
+    today = datetime.now()
+    rows = []
+    for i in range(5):
+        d = today - timedelta(days=i)
+        label = d.strftime('%d.%m.%Y')
+        if i == 0:
+            label = 'Сегодня, ' + label
+        elif i == 1:
+            label = 'Вчера, ' + label
+        rows.append([InlineKeyboardButton(label, callback_data=f'date:{d.strftime("%d.%m.%Y")}')])
+    rows.append([InlineKeyboardButton('✍️ Ввести вручную', callback_data='date:manual')])
+    return InlineKeyboardMarkup(rows)
+
 # ================== ЛОГИКА БОТА ==================
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data.clear()
     kb = [[
         InlineKeyboardButton('➕ Расход', callback_data='type:expense'),
         InlineKeyboardButton('💰 Доход', callback_data='type:income')
@@ -122,8 +141,8 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         subs = get_subcategories(ctx.user_data['type'], cat)
         if not subs:
             ctx.user_data['subcategory'] = ''
-            await q.edit_message_text('📝 Введите название операции:')
             ctx.user_data['step'] = 'name'
+            await q.edit_message_text('📝 Введите название операции:')
         else:
             ctx.user_data['subs'] = subs
             kb = [[InlineKeyboardButton(s, callback_data=f'sub:{i}')] for i, s in enumerate(subs)]
@@ -135,6 +154,17 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ctx.user_data['subcategory'] = ctx.user_data['subs'][idx]
         ctx.user_data['step'] = 'name'
         await q.edit_message_text('📝 Введите название операции:')
+
+    elif data.startswith('date:'):
+        value = data.split(':', 1)[1]
+        if value == 'manual':
+            ctx.user_data['step'] = 'date'
+            await q.edit_message_text('📅 Введите дату в формате ДД.ММ.ГГГГ:')
+        else:
+            ctx.user_data['date'] = value
+            ctx.user_data['step'] = 'comment'
+            kb = [[InlineKeyboardButton('⏭ Пропустить', callback_data='skip')]]
+            await q.edit_message_text('📝 Комментарий:', reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == 'skip':
         ctx.user_data['comment'] = ''
@@ -156,6 +186,21 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text('❌ Нужно число. Попробуйте снова:')
             return
         ctx.user_data['amount'] = amount
+        ctx.user_data['step'] = 'date'
+        await update.message.reply_text(
+            '📅 Выберите дату или введите вручную (ДД.ММ.ГГГГ):',
+            reply_markup=date_keyboard()
+        )
+
+    elif step == 'date':
+        try:
+            parsed = datetime.strptime(text, '%d.%m.%Y')
+            ctx.user_data['date'] = parsed.strftime('%d.%m.%Y')
+        except ValueError:
+            await update.message.reply_text(
+                '❌ Неверный формат. Введите дату как ДД.ММ.ГГГГ, например 25.09.2026:'
+            )
+            return
         ctx.user_data['step'] = 'comment'
         kb = [[InlineKeyboardButton('⏭ Пропустить', callback_data='skip')]]
         await update.message.reply_text('📝 Комментарий:', reply_markup=InlineKeyboardMarkup(kb))
@@ -177,6 +222,7 @@ async def finish(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if ctx.user_data.get('subcategory'):
             msg += f" / {ctx.user_data['subcategory']}"
         msg += f"\n💰 {ctx.user_data['amount']}"
+        msg += f"\n📅 {ctx.user_data.get('date', '')}"
         if ctx.user_data.get('comment'):
             msg += f"\n💬 {ctx.user_data['comment']}"
     except Exception as e:
@@ -192,7 +238,6 @@ async def finish(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
 
 # ================== FASTAPI ОБЁРТКА ==================
-# Создаём Application без запуска polling
 application = Application.builder().token(BOT_TOKEN).updater(None).build()
 application.add_handler(CommandHandler('start', start))
 application.add_handler(CallbackQueryHandler(on_callback))
@@ -200,9 +245,8 @@ application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Инициализируем бота при старте
     await application.bot.set_webhook(
-        url=f"https://my-budget-bot-mu.vercel.app/api/bot",
+        url=WEBHOOK_URL,
         allowed_updates=Update.ALL_TYPES
     )
     async with application:
