@@ -120,12 +120,12 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ctx.user_data['type'] = t
         cats = get_categories(t)
         if not cats:
-            await q.edit_message_text('❌ Нет категорий в таблице')
+            await q.message.reply_text('❌ Нет категорий в таблице')
             return
         ctx.user_data['cats'] = cats
         kb = [[InlineKeyboardButton(c, callback_data=f'cat:{i}')] for i, c in enumerate(cats)]
         kb.append([InlineKeyboardButton('⬅️ Отмена', callback_data='menu')])
-        await q.edit_message_text('📂 Выберите категорию:', reply_markup=InlineKeyboardMarkup(kb))
+        await q.message.reply_text('📂 Выберите категорию:', reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == 'menu':
         ctx.user_data.clear()
@@ -133,7 +133,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton('➕ Расход', callback_data='type:expense'),
             InlineKeyboardButton('💰 Доход', callback_data='type:income')
         ]]
-        await q.edit_message_text('Что записываем?', reply_markup=InlineKeyboardMarkup(kb))
+        await q.message.reply_text('Что записываем?', reply_markup=InlineKeyboardMarkup(kb))
 
     elif data.startswith('cat:'):
         idx = int(data.split(':')[1])
@@ -144,7 +144,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ctx.user_data['subcategory'] = ''
             ctx.user_data['step'] = 'name'
             kb = [[InlineKeyboardButton('⏭ Пропустить', callback_data='skip_name')]]
-            await q.edit_message_text(
+            await q.message.reply_text(
                 '📝 Введите название операции (или нажмите «Пропустить»):',
                 reply_markup=InlineKeyboardMarkup(kb)
             )
@@ -152,14 +152,14 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ctx.user_data['subs'] = subs
             kb = [[InlineKeyboardButton(s, callback_data=f'sub:{i}')] for i, s in enumerate(subs)]
             kb.append([InlineKeyboardButton('⬅️ Отмена', callback_data='menu')])
-            await q.edit_message_text('📁 Выберите подкатегорию:', reply_markup=InlineKeyboardMarkup(kb))
+            await q.message.reply_text('📁 Выберите подкатегорию:', reply_markup=InlineKeyboardMarkup(kb))
 
     elif data.startswith('sub:'):
         idx = int(data.split(':')[1])
         ctx.user_data['subcategory'] = ctx.user_data['subs'][idx]
         ctx.user_data['step'] = 'name'
         kb = [[InlineKeyboardButton('⏭ Пропустить', callback_data='skip_name')]]
-        await q.edit_message_text(
+        await q.message.reply_text(
             '📝 Введите название операции (или нажмите «Пропустить»):',
             reply_markup=InlineKeyboardMarkup(kb)
         )
@@ -167,20 +167,20 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data == 'skip_name':
         ctx.user_data['name'] = ''
         ctx.user_data['step'] = 'amount'
-        await q.edit_message_text('💰 Введите сумму:')
+        await q.message.reply_text('💰 Введите сумму:')
 
     elif data.startswith('date:'):
         value = data.split(':', 1)[1]
         if value == 'manual':
             ctx.user_data['step'] = 'date'
-            await q.edit_message_text('📅 Введите дату в формате ДД.ММ.ГГГГ:')
+            await q.message.reply_text('📅 Введите дату в формате ДД.ММ.ГГГГ:')
         else:
             parsed = datetime.strptime(value, '%Y-%m-%d')
             ctx.user_data['date'] = parsed.strftime('%Y-%m-%d')
             ctx.user_data['date_display'] = parsed.strftime('%d.%m.%Y')
             ctx.user_data['step'] = 'comment'
             kb = [[InlineKeyboardButton('⏭ Пропустить', callback_data='skip')]]
-            await q.edit_message_text('📝 Комментарий:', reply_markup=InlineKeyboardMarkup(kb))
+            await q.message.reply_text('📝 Комментарий:', reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == 'skip':
         ctx.user_data['comment'] = ''
@@ -250,7 +250,7 @@ async def finish(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton('💰 Доход', callback_data='type:income')
     ]]
     if update.callback_query:
-        await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+        await update.callback_query.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
     else:
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
 
