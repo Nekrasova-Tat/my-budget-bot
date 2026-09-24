@@ -74,7 +74,7 @@ def save_entry(user, state):
     data = {
         'Telegram ID': user.id,
         'Username': '@' + user.username if user.username else '',
-        'Дата': state.get('date') or datetime.now().strftime('%d.%m.%Y'),
+        'Дата': state.get('date') or datetime.now().strftime('%Y-%m-%d'),
         'Название': state.get('name', ''),
         'Категория': state.get('category', ''),
         'Подкатегория': state.get('subcategory', ''),
@@ -90,12 +90,13 @@ def date_keyboard():
     rows = []
     for i in range(5):
         d = today - timedelta(days=i)
+        iso = d.strftime('%Y-%m-%d')
         label = d.strftime('%d.%m.%Y')
         if i == 0:
             label = 'Сегодня, ' + label
         elif i == 1:
             label = 'Вчера, ' + label
-        rows.append([InlineKeyboardButton(label, callback_data=f'date:{d.strftime("%d.%m.%Y")}')])
+        rows.append([InlineKeyboardButton(label, callback_data=f'date:{iso}')])
     rows.append([InlineKeyboardButton('✍️ Ввести вручную', callback_data='date:manual')])
     return InlineKeyboardMarkup(rows)
 
@@ -142,7 +143,11 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not subs:
             ctx.user_data['subcategory'] = ''
             ctx.user_data['step'] = 'name'
-            await q.edit_message_text('📝 Введите название операции:')
+            kb = [[InlineKeyboardButton('⏭ Пропустить', callback_data='skip_name')]]
+            await q.edit_message_text(
+                '📝 Введите название операции (или нажмите «Пропустить»):',
+                reply_markup=InlineKeyboardMarkup(kb)
+            )
         else:
             ctx.user_data['subs'] = subs
             kb = [[InlineKeyboardButton(s, callback_data=f'sub:{i}')] for i, s in enumerate(subs)]
@@ -153,7 +158,16 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         idx = int(data.split(':')[1])
         ctx.user_data['subcategory'] = ctx.user_data['subs'][idx]
         ctx.user_data['step'] = 'name'
-        await q.edit_message_text('📝 Введите название операции:')
+        kb = [[InlineKeyboardButton('⏭ Пропустить', callback_data='skip_name')]]
+        await q.edit_message_text(
+            '📝 Введите название операции (или нажмите «Пропустить»):',
+            reply_markup=InlineKeyboardMarkup(kb)
+        )
+
+    elif data == 'skip_name':
+        ctx.user_data['name'] = ''
+        ctx.user_data['step'] = 'amount'
+        await q.edit_message_text('💰 Введите сумму:')
 
     elif data.startswith('date:'):
         value = data.split(':', 1)[1]
@@ -161,7 +175,9 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ctx.user_data['step'] = 'date'
             await q.edit_message_text('📅 Введите дату в формате ДД.ММ.ГГГГ:')
         else:
-            ctx.user_data['date'] = value
+            parsed = datetime.strptime(value, '%Y-%m-%d')
+            ctx.user_data['date'] = parsed.strftime('%Y-%m-%d')
+            ctx.user_data['date_display'] = parsed.strftime('%d.%m.%Y')
             ctx.user_data['step'] = 'comment'
             kb = [[InlineKeyboardButton('⏭ Пропустить', callback_data='skip')]]
             await q.edit_message_text('📝 Комментарий:', reply_markup=InlineKeyboardMarkup(kb))
@@ -195,7 +211,8 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif step == 'date':
         try:
             parsed = datetime.strptime(text, '%d.%m.%Y')
-            ctx.user_data['date'] = parsed.strftime('%d.%m.%Y')
+            ctx.user_data['date'] = parsed.strftime('%Y-%m-%d')
+            ctx.user_data['date_display'] = parsed.strftime('%d.%m.%Y')
         except ValueError:
             await update.message.reply_text(
                 '❌ Неверный формат. Введите дату как ДД.ММ.ГГГГ, например 25.09.2026:'
@@ -217,12 +234,12 @@ async def finish(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         save_entry(user, ctx.user_data)
         t = '➖ Расход' if ctx.user_data['type'] == 'expense' else '➕ Доход'
-        msg = f"✅ Записано!\n\n{t}: {ctx.user_data.get('name', '')}"
+        msg = f"✅ Записано!\n\n{t}: {ctx.user_data.get('name', '') or '—'}"
         msg += f"\n📂 {ctx.user_data.get('category', '')}"
         if ctx.user_data.get('subcategory'):
             msg += f" / {ctx.user_data['subcategory']}"
         msg += f"\n💰 {ctx.user_data['amount']}"
-        msg += f"\n📅 {ctx.user_data.get('date', '')}"
+        msg += f"\n📅 {ctx.user_data.get('date_display', ctx.user_data.get('date', ''))}"
         if ctx.user_data.get('comment'):
             msg += f"\n💬 {ctx.user_data['comment']}"
     except Exception as e:
