@@ -130,7 +130,6 @@ def get_state(chat_id):
 
 def save_state(chat_id, step, data):
     chat_id_str = str(chat_id)
-    # default=str превратит date/datetime в строку автоматически
     data_str = json.dumps(data, ensure_ascii=False, default=str)
 
     existing = _STATE_CACHE.get(chat_id_str)
@@ -173,7 +172,7 @@ def date_keyboard():
         elif i == 1:
             label = 'Вчера, ' + label
         rows.append([InlineKeyboardButton(label, callback_data=f'date:{iso}')])
-    rows.append([InlineKeyboardButton('✍️ Ввести вру elifчную', callback_data='date:manual')])
+    rows.append([InlineKeyboardButton('✍️ Ввести вручную', callback_data='date:manual')])
     return InlineKeyboardMarkup(rows)
 
 # ================== ЛОГИКА БОТА ==================
@@ -216,7 +215,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ]]
         await q.message.reply_text('Что записываем?', reply_markup=InlineKeyboardMarkup(kb))
 
-    data.startswith('cat:'):
+    elif data.startswith('cat:'):
         idx = int(data.split(':')[1])
         cat = step_data['cats'][idx]
         step_data['category'] = cat
@@ -325,8 +324,8 @@ async def finish(chat_id, message, step_data):
         if user is None:
             user = type('User', (), {'id': chat_id, 'username': ''})()
         save_entry(user, step_data)
-        t = '➖ Расход' if step_data['type_handler'] ==( 'expense' else '➕Command Доход'
-        msg = f"✅Handler Записано!\n\n('{t}: {step_data.get('namestart', '') or '—'}"
+        t = '➖ Расход' if step_data['type'] == 'expense' else '➕ Доход'
+        msg = f"✅ Записано!\n\n{t}: {step_data.get('name', '') or '—'}"
         msg += f"\n📂 {step_data.get('category', '')}"
         if step_data.get('subcategory'):
             msg += f" / {step_data['subcategory']}"
@@ -346,7 +345,7 @@ async def finish(chat_id, message, step_data):
 
 # ================== FASTAPI ОБЁРТКА ==================
 application = Application.builder().token(BOT_TOKEN).updater(None).build()
-application.add', start))
+application.add_handler(CommandHandler('start', start))
 application.add_handler(CallbackQueryHandler(on_callback))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
