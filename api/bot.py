@@ -335,7 +335,7 @@ async def lifespan(app: FastAPI):
         allowed_updates=Update.ALL_TYPES
     )
     async with application:
-        awaitф application.start()
+        await application.start()
         yield
         await applicationов.stop()
 
