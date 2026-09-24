@@ -18,6 +18,7 @@ SHEET_NAME = 'Бюджет'
 SHEET_EXPENSES = 'Расходы'
 SHEET_INCOMES = 'Доходы'
 SHEET_CATEGORIES = 'Категории'
+SHEET_STATE = 'Состояние'
 
 WEBHOOK_URL = 'https://my-budget-bot-mu.vercel.app/api/bot'
 
@@ -72,7 +73,6 @@ def save_entry(user, state):
     ws = get_sheet().worksheet(sheet_name)
     headers = ws.row_values(1)
 
-    # Преобразуем дату в объект date, чтобы Google Таблицы распознали её как дату
     date_str = state.get('date')
     if date_str:
         date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
@@ -90,8 +90,44 @@ def save_entry(user, state):
         'Комментарии': state.get('comment', '')
     }
     row = [data.get(h.strip(), '') for h in headers]
-
     ws.append_row(row, value_input_option='USER_ENTERED')
+
+# ================== ХРАНЕНИЕ СОСТОЯНИЯ В SHEETS ==================
+def state_sheet():
+    return get_sheet().worksheet(SHEET_STATE)
+
+def get_state(chat_id):
+    """Читает состояние пользователя из листа 'Состояние'. Возвращает dict или None."""
+    sh = state_sheet()
+    all_rows = sh.get_all_values()
+    chat_id_str = str(chat_id)
+    for idx, row in enumerate(all_rows[1:], start=2):  # пропускаем заголовки
+        if row and row[0] == chat_id_str:
+            data_str = row[2] if len(row) > 2 else '{}'
+            try:
+                data = json.loads(data_str) if data_str else {}
+            except Exception:
+                data = {}
+            return {'row': idx, 'step': row[1] if len(row) > 1 else '', 'data': data}
+    return None
+
+def save_state(chat_id, step, data):
+    """Сохраняет состояние пользователя. Если запись есть — обновляет, если нет — добавляет."""
+    sh = state_sheet()
+    chat_id_str = str(chat_id)
+    data_str = json.dumps(data, ensure_ascii=False)
+    existing = get_state(chat_id)
+    if existing:
+        sh.update(f'A{existing["row"]}:C{existing["row"]}', [[chat_id_str, step, data_str]])
+    else:
+        sh.append_row([chat_id_str, step, data_str])
+
+def clear_state(chat_id):
+    """Удаляет строку с состоянием пользователя."""
+    sh = state_sheet()
+    existing = get_state(chat_id)
+    if existing:
+        sh.delete_rows(existing['row'])
 
 # ================== КЛАВИАТУРА С ДАТАМИ ==================
 def date_keyboard():
@@ -111,7 +147,8 @@ def date_keyboard():
 
 # ================== ЛОГИКА БОТА ==================
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data.clear()
+    chat_id = update.effective_chat.id
+    clear_state(chat_id)
     kb = [[
         InlineKeyboardButton('➕ Расход', callback_data='type:expense'),
         InlineKeyboardButton('💰 Доход', callback_data='type:income')
@@ -121,23 +158,28 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+    chat_id = q.message.chat.id
     data = q.data
+
+    state = get_state(chat_id)
+    step_data = state['data'] if state else {}
 
     if data.startswith('type:'):
         t = data.split(':')[1]
-        ctx.user_data.clear()
-        ctx.user_data['type'] = t
+        step_data = {'type': t}
+        save_state(chat_id, 'category', step_data)
         cats = get_categories(t)
         if not cats:
             await q.message.reply_text('❌ Нет категорий в таблице')
             return
-        ctx.user_data['cats'] = cats
+        step_data['cats'] = cats
+        save_state(chat_id, 'category', step_data)
         kb = [[InlineKeyboardButton(c, callback_data=f'cat:{i}')] for i, c in enumerate(cats)]
         kb.append([InlineKeyboardButton('⬅️ Отмена', callback_data='menu')])
         await q.message.reply_text('📂 Выберите категорию:', reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == 'menu':
-        ctx.user_data.clear()
+        clear_state(chat_id)
         kb = [[
             InlineKeyboardButton('➕ Расход', callback_data='type:expense'),
             InlineKeyboardButton('💰 Доход', callback_data='type:income')
@@ -146,27 +188,28 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith('cat:'):
         idx = int(data.split(':')[1])
-        cat = ctx.user_data['cats'][idx]
-        ctx.user_data['category'] = cat
-        subs = get_subcategories(ctx.user_data['type'], cat)
+        cat = step_data['cats'][idx]
+        step_data['category'] = cat
+        subs = get_subcategories(step_data['type'], cat)
         if not subs:
-            ctx.user_data['subcategory'] = ''
-            ctx.user_data['step'] = 'name'
+            step_data['subcategory'] = ''
+            save_state(chat_id, 'name', step_data)
             kb = [[InlineKeyboardButton('⏭ Пропустить', callback_data='skip_name')]]
             await q.message.reply_text(
                 '📝 Введите название операции (или нажмите «Пропустить»):',
                 reply_markup=InlineKeyboardMarkup(kb)
             )
         else:
-            ctx.user_data['subs'] = subs
+            step_data['subs'] = subs
+            save_state(chat_id, 'subcategory', step_data)
             kb = [[InlineKeyboardButton(s, callback_data=f'sub:{i}')] for i, s in enumerate(subs)]
             kb.append([InlineKeyboardButton('⬅️ Отмена', callback_data='menu')])
             await q.message.reply_text('📁 Выберите подкатегорию:', reply_markup=InlineKeyboardMarkup(kb))
 
     elif data.startswith('sub:'):
         idx = int(data.split(':')[1])
-        ctx.user_data['subcategory'] = ctx.user_data['subs'][idx]
-        ctx.user_data['step'] = 'name'
+        step_data['subcategory'] = step_data['subs'][idx]
+        save_state(chat_id, 'name', step_data)
         kb = [[InlineKeyboardButton('⏭ Пропустить', callback_data='skip_name')]]
         await q.message.reply_text(
             '📝 Введите название операции (или нажмите «Пропустить»):',
@@ -174,34 +217,42 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
     elif data == 'skip_name':
-        ctx.user_data['name'] = ''
-        ctx.user_data['step'] = 'amount'
+        step_data['name'] = ''
+        save_state(chat_id, 'amount', step_data)
         await q.message.reply_text('💰 Введите сумму:')
 
     elif data.startswith('date:'):
         value = data.split(':', 1)[1]
         if value == 'manual':
-            ctx.user_data['step'] = 'date'
+            save_state(chat_id, 'date', step_data)
             await q.message.reply_text('📅 Введите дату в формате ДД.ММ.ГГГГ:')
         else:
             parsed = datetime.strptime(value, '%Y-%m-%d')
-            ctx.user_data['date'] = parsed.strftime('%Y-%m-%d')
-            ctx.user_data['date_display'] = parsed.strftime('%d.%m.%Y')
-            ctx.user_data['step'] = 'comment'
+            step_data['date'] = parsed.strftime('%Y-%m-%d')
+            step_data['date_display'] = parsed.strftime('%d.%m.%Y')
+            save_state(chat_id, 'comment', step_data)
             kb = [[InlineKeyboardButton('⏭ Пропустить', callback_data='skip')]]
             await q.message.reply_text('📝 Комментарий:', reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == 'skip':
-        ctx.user_data['comment'] = ''
-        await finish(update, ctx)
+        step_data['comment'] = ''
+        await finish(chat_id, q.message, step_data)
 
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    step = ctx.user_data.get('step')
+    chat_id = update.effective_chat.id
+    state = get_state(chat_id)
+
+    if not state:
+        await start(update, ctx)
+        return
+
+    step = state['step']
+    step_data = state['data']
     text = update.message.text.strip()
 
     if step == 'name':
-        ctx.user_data['name'] = text
-        ctx.user_data['step'] = 'amount'
+        step_data['name'] = text
+        save_state(chat_id, 'amount', step_data)
         await update.message.reply_text('💰 Введите сумму:')
 
     elif step == 'amount':
@@ -210,8 +261,8 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             await update.message.reply_text('❌ Нужно число. Попробуйте снова:')
             return
-        ctx.user_data['amount'] = amount
-        ctx.user_data['step'] = 'date'
+        step_data['amount'] = amount
+        save_state(chat_id, 'date', step_data)
         await update.message.reply_text(
             '📅 Выберите дату или введите вручную (ДД.ММ.ГГГГ):',
             reply_markup=date_keyboard()
@@ -220,48 +271,50 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif step == 'date':
         try:
             parsed = datetime.strptime(text, '%d.%m.%Y')
-            ctx.user_data['date'] = parsed.strftime('%Y-%m-%d')
-            ctx.user_data['date_display'] = parsed.strftime('%d.%m.%Y')
+            step_data['date'] = parsed.strftime('%Y-%m-%d')
+            step_data['date_display'] = parsed.strftime('%d.%m.%Y')
         except ValueError:
             await update.message.reply_text(
                 '❌ Неверный формат. Введите дату как ДД.ММ.ГГГГ, например 25.09.2026:'
             )
             return
-        ctx.user_data['step'] = 'comment'
+        save_state(chat_id, 'comment', step_data)
         kb = [[InlineKeyboardButton('⏭ Пропустить', callback_data='skip')]]
         await update.message.reply_text('📝 Комментарий:', reply_markup=InlineKeyboardMarkup(kb))
 
     elif step == 'comment':
-        ctx.user_data['comment'] = text
-        await finish(update, ctx)
+        step_data['comment'] = text
+        await finish(chat_id, update.message, step_data)
 
     else:
         await start(update, ctx)
 
-async def finish(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+async def finish(chat_id, message, step_data):
+    """Записывает данные в таблицу и очищает состояние."""
     try:
-        save_entry(user, ctx.user_data)
-        t = '➖ Расход' if ctx.user_data['type'] == 'expense' else '➕ Доход'
-        msg = f"✅ Записано!\n\n{t}: {ctx.user_data.get('name', '') or '—'}"
-        msg += f"\n📂 {ctx.user_data.get('category', '')}"
-        if ctx.user_data.get('subcategory'):
-            msg += f" / {ctx.user_data['subcategory']}"
-        msg += f"\n💰 {ctx.user_data['amount']}"
-        msg += f"\n📅 {ctx.user_data.get('date_display', ctx.user_data.get('date', ''))}"
-        if ctx.user_data.get('comment'):
-            msg += f"\n💬 {ctx.user_data['comment']}"
+        user = message.from_user if hasattr(message, 'from_user') else None
+        # Если сообщение — это callback, берём пользователя из чата
+        if user is None:
+            user = type('User', (), {'id': chat_id, 'username': ''})()
+        save_entry(user, step_data)
+        t = '➖ Расход' if step_data['type'] == 'expense' else '➕ Доход'
+        msg = f"✅ Записано!\n\n{t}: {step_data.get('name', '') or '—'}"
+        msg += f"\n📂 {step_data.get('category', '')}"
+        if step_data.get('subcategory'):
+            msg += f" / {step_data['subcategory']}"
+        msg += f"\n💰 {step_data['amount']}"
+        msg += f"\n📅 {step_data.get('date_display', step_data.get('date', ''))}"
+        if step_data.get('comment'):
+            msg += f"\n💬 {step_data['comment']}"
     except Exception as e:
         msg = f'❌ Ошибка: {e}'
-    ctx.user_data.clear()
+
+    clear_state(chat_id)
     kb = [[
         InlineKeyboardButton('➕ Расход', callback_data='type:expense'),
         InlineKeyboardButton('💰 Доход', callback_data='type:income')
     ]]
-    if update.callback_query:
-        await update.callback_query.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
-    else:
-        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+    await message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
 
 # ================== FASTAPI ОБЁРТКА ==================
 application = Application.builder().token(BOT_TOKEN).updater(None).build()
