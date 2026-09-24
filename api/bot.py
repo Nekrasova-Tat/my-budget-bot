@@ -86,14 +86,14 @@ def save_entry(user, state):
 
     date_str = state.get('date')
     if date_str:
-        date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+        date_value = date_str
     else:
-        date_obj = date.today()
+        date_value = date.today().strftime('%Y-%m-%d')
 
     data = {
         'Telegram ID': user.id,
         'Username': '@' + user.username if user.username else '',
-        'Дата': date_obj,
+        'Дата': date_value,
         'Название': state.get('name', ''),
         'Категория': state.get('category', ''),
         'Подкатегория': state.get('subcategory', ''),
