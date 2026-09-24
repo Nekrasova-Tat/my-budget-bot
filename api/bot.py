@@ -1,17 +1,16 @@
 import os
 import json
-import logging
+from contextlib import asynccontextmanager
+from http import HTTPStatus
+
+from fastapi import FastAPI, Request, Response
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler,
-    MessageHandler, filters, ContextTypes
-)
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 import gspread
 from google.oauth2.service_account import Credentials
 
 # ================== НАСТРОЙКИ ==================
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-# Вставьте сюда содержимое JSON-файла сервисного аккаунта Google
 CREDENTIALS_JSON = os.environ.get('GOOGLE_CREDENTIALS')
 
 SHEET_NAME = 'Бюджет'
@@ -192,17 +191,34 @@ async def finish(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
 
-# ================== ТОЧКА ВХОДА ДЛЯ VERCEL ==================
-app = Application.builder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler('start', start))
-app.add_handler(CallbackQueryHandler(on_callback))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+# ================== FASTAPI ОБЁРТКА ==================
+# Создаём Application без запуска polling
+application = Application.builder().token(BOT_TOKEN).updater(None).build()
+application.add_handler(CommandHandler('start', start))
+application.add_handler(CallbackQueryHandler(on_callback))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
-async def handler(request):
-    """HTTP-функция, которую вызывает Vercel."""
-    from telegram import Update as TGUpdate
-    body = await request.json()
-    update = TGUpdate.de_json(body, app.bot)
-    await app.initialize()
-    await app.process_update(update)
-    return {'status': 'ok'}
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Инициализируем бота при старте
+    await application.bot.set_webhook(
+        url=f"https://my-budget-bot-mu.vercel.app/api/bot",
+        allowed_updates=Update.ALL_TYPES
+    )
+    async with application:
+        await application.start()
+        yield
+        await application.stop()
+
+app = FastAPI(lifespan=lifespan)
+
+@app.post("/api/bot")
+async def process_update(request: Request):
+    try:
+        req = await request.json()
+        update = Update.de_json(req, application.bot)
+        await application.process_update(update)
+        return Response(status_code=HTTPStatus.OK)
+    except Exception as e:
+        print(f"Error: {e}")
+        return Response(status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
