@@ -22,6 +22,10 @@ SHEET_STATE = 'Состояние'
 
 WEBHOOK_URL = 'https://my-budget-bot-mu.vercel.app/api/bot'
 
+# ================== КЭШ (в памяти функции, живёт между вызовами) ==================
+_STATE_CACHE = {}
+_CATEGORIES_CACHE = {}
+
 # ================== GOOGLE SHEETS ==================
 def get_sheet():
     creds_dict = json.loads(CREDENTIALS_JSON)
@@ -37,6 +41,8 @@ def type_to_sheet(t):
     return 'Расход' if t == 'expense' else 'Доход'
 
 def get_categories(t):
+    if t in _CATEGORIES_CACHE:
+        return _CATEGORIES_CACHE[t]
     sheet = get_sheet().worksheet(SHEET_CATEGORIES)
     data = sheet.get_all_values()
     sheet_type = type_to_sheet(t)
@@ -49,9 +55,13 @@ def get_categories(t):
         if row_type.lower() == sheet_type.lower() and cat and cat not in seen:
             seen.add(cat)
             result.append(cat)
+    _CATEGORIES_CACHE[t] = result
     return result
 
 def get_subcategories(t, category):
+    cache_key = f'{t}:{category}'
+    if cache_key in _CATEGORIES_CACHE:
+        return _CATEGORIES_CACHE[cache_key]
     sheet = get_sheet().worksheet(SHEET_CATEGORIES)
     data = sheet.get_all_values()
     sheet_type = type_to_sheet(t)
@@ -66,6 +76,7 @@ def get_subcategories(t, category):
                 and cat == category
                 and sub and sub not in ('—', '-')):
             result.append(sub)
+    _CATEGORIES_CACHE[cache_key] = result
     return result
 
 def save_entry(user, state):
@@ -92,14 +103,16 @@ def save_entry(user, state):
     row = [data.get(h.strip(), '') for h in headers]
     ws.append_row(row, value_input_option='USER_ENTERED')
 
-# ================== ХРАНЕНИЕ СОСТОЯНИЯ В SHEETS ==================
+# ================== ХРАНЕНИЕ СОСТОЯНИЯ С КЭШЕМ ==================
 def state_sheet():
     return get_sheet().worksheet(SHEET_STATE)
 
 def get_state(chat_id):
+    chat_id_str = str(chat_id).strip()
+    if chat_id_str in _STATE_CACHE:
+        return _STATE_CACHE[chat_id_str]
     sh = state_sheet()
     all_rows = sh.get_all_values()
-    chat_id_str = str(chat_id).strip()
     for idx, row in enumerate(all_rows[1:], start=2):
         if not row:
             continue
@@ -110,11 +123,12 @@ def get_state(chat_id):
                 data = json.loads(data_str) if data_str else {}
             except Exception:
                 data = {}
-            return {'row': idx, 'step': row[1] if len(row) > 1 else '', 'data': data}
+            result = {'row': idx, 'step': row[1] if len(row) > 1 else '', 'data': data}
+            _STATE_CACHE[chat_id_str] = result
+            return result
     return None
 
 def save_state(chat_id, step, data):
-    sh = state_sheet()
     chat_id_str = str(chat_id)
 
     safe_data = {}
@@ -124,17 +138,34 @@ def save_state(chat_id, step, data):
         else:
             safe_data[k] = v
 
-    data_str = json.dumps(safe_data, ensure_ascii=False)
-    existing = get_state(chat_id)
+    existing = _STATE_CACHE.get(chat_id_str)
+    if existing is None:
+        existing = get_state(chat_id)
+
     if existing:
-        sh.update(f'A{existing["row"]}:C{existing["row"]}', [[chat_id_str, step, data_str]])
+        existing['step'] = step
+        existing['data'] = safe_data
+        _STATE_CACHE[chat_id_str] = existing
+        if existing.get('row'):
+            data_str = json.dumps(safe_data, ensure_ascii=False)
+            sh = state_sheet()
+            sh.update(f'A{existing["row"]}:C{existing["row"]}', [[chat_id_str, step, data_str]])
     else:
+        data_str = json.dumps(safe_data, ensure_ascii=False)
+        sh = state_sheet()
         sh.append_row([chat_id_str, step, data_str])
+        # После добавления нужно узнать номер строки — прочитаем один раз
+        all_rows = sh.get_all_values()
+        for idx, row in enumerate(all_rows[1:], start=2):
+            if row and str(row[0]).strip().replace("'", "") == chat_id_str:
+                _STATE_CACHE[chat_id_str] = {'row': idx, 'step': step, 'data': safe_data}
+                break
 
 def clear_state(chat_id):
-    sh = state_sheet()
-    existing = get_state(chat_id)
-    if existing:
+    chat_id_str = str(chat_id).strip()
+    existing = _STATE_CACHE.pop(chat_id_str, None)
+    if existing and existing.get('row'):
+        sh = state_sheet()
         sh.delete_rows(existing['row'])
 
 # ================== КЛАВИАТУРА С ДАТАМИ ==================
