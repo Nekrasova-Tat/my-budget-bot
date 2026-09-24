@@ -22,7 +22,7 @@ SHEET_STATE = 'Состояние'
 
 WEBHOOK_URL = 'https://my-budget-bot-mu.vercel.app/api/bot'
 
-# ================== КЭШ (в памяти функции, живёт между вызовами) ==================
+# ================== КЭШ ==================
 _STATE_CACHE = {}
 _CATEGORIES_CACHE = {}
 
@@ -103,7 +103,7 @@ def save_entry(user, state):
     row = [data.get(h.strip(), '') for h in headers]
     ws.append_row(row, value_input_option='USER_ENTERED')
 
-# ================== ХРАНЕНИЕ СОСТОЯНИЯ С КЭШЕМ ==================
+# ================== ХРАНЕНИЕ СОСТОЯНИЯ ==================
 def state_sheet():
     return get_sheet().worksheet(SHEET_STATE)
 
@@ -130,13 +130,8 @@ def get_state(chat_id):
 
 def save_state(chat_id, step, data):
     chat_id_str = str(chat_id)
-
-    safe_data = {}
-    for k, v in data.items():
-        if isinstance(v, (date, datetime)):
-            safe_data[k] = v.strftime('%Y-%m-%d')
-        else:
-            safe_data[k] = v
+    # default=str превратит date/datetime в строку автоматически
+    data_str = json.dumps(data, ensure_ascii=False, default=str)
 
     existing = _STATE_CACHE.get(chat_id_str)
     if existing is None:
@@ -144,21 +139,18 @@ def save_state(chat_id, step, data):
 
     if existing:
         existing['step'] = step
-        existing['data'] = safe_data
+        existing['data'] = data
         _STATE_CACHE[chat_id_str] = existing
         if existing.get('row'):
-            data_str = json.dumps(safe_data, ensure_ascii=False)
             sh = state_sheet()
             sh.update(f'A{existing["row"]}:C{existing["row"]}', [[chat_id_str, step, data_str]])
     else:
-        data_str = json.dumps(safe_data, ensure_ascii=False)
         sh = state_sheet()
         sh.append_row([chat_id_str, step, data_str])
-        # После добавления нужно узнать номер строки — прочитаем один раз
         all_rows = sh.get_all_values()
         for idx, row in enumerate(all_rows[1:], start=2):
             if row and str(row[0]).strip().replace("'", "") == chat_id_str:
-                _STATE_CACHE[chat_id_str] = {'row': idx, 'step': step, 'data': safe_data}
+                _STATE_CACHE[chat_id_str] = {'row': idx, 'step': step, 'data': data}
                 break
 
 def clear_state(chat_id):
@@ -181,7 +173,7 @@ def date_keyboard():
         elif i == 1:
             label = 'Вчера, ' + label
         rows.append([InlineKeyboardButton(label, callback_data=f'date:{iso}')])
-    rows.append([InlineKeyboardButton('✍️ Ввести вручную', callback_data='date:manual')])
+    rows.append([InlineKeyboardButton('✍️ Ввести вру elifчную', callback_data='date:manual')])
     return InlineKeyboardMarkup(rows)
 
 # ================== ЛОГИКА БОТА ==================
@@ -224,7 +216,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ]]
         await q.message.reply_text('Что записываем?', reply_markup=InlineKeyboardMarkup(kb))
 
-    elif data.startswith('cat:'):
+    data.startswith('cat:'):
         idx = int(data.split(':')[1])
         cat = step_data['cats'][idx]
         step_data['category'] = cat
@@ -333,8 +325,8 @@ async def finish(chat_id, message, step_data):
         if user is None:
             user = type('User', (), {'id': chat_id, 'username': ''})()
         save_entry(user, step_data)
-        t = '➖ Расход' if step_data['type'] == 'expense' else '➕ Доход'
-        msg = f"✅ Записано!\n\n{t}: {step_data.get('name', '') or '—'}"
+        t = '➖ Расход' if step_data['type_handler'] ==( 'expense' else '➕Command Доход'
+        msg = f"✅Handler Записано!\n\n('{t}: {step_data.get('namestart', '') or '—'}"
         msg += f"\n📂 {step_data.get('category', '')}"
         if step_data.get('subcategory'):
             msg += f" / {step_data['subcategory']}"
@@ -354,7 +346,7 @@ async def finish(chat_id, message, step_data):
 
 # ================== FASTAPI ОБЁРТКА ==================
 application = Application.builder().token(BOT_TOKEN).updater(None).build()
-application.add_handler(CommandHandler('start', start))
+application.add', start))
 application.add_handler(CallbackQueryHandler(on_callback))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
