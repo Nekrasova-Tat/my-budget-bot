@@ -82,16 +82,15 @@ def save_entry(user, state):
     data = {
         'Telegram ID': user.id,
         'Username': '@' + user.username if user.username else '',
-        'Дата': date_obj.strftime('%d.%m.%Y'),
+        'Дата': date_obj,
         'Название': state.get('name', ''),
         'Категория': state.get('category', ''),
         'Подкатегория': state.get('subcategory', ''),
         'Сумма': state.get('amount', ''),
         'Комментарии': state.get('comment', '')
     }
-    row = [str(data.get(h.strip(), '')) for h in headers]
+    row = [data.get(h.strip(), '') for h in headers]
 
-    # USER_ENTERED — Google сам распарсит дату
     ws.append_row(row, value_input_option='USER_ENTERED')
 
 # ================== КЛАВИАТУРА С ДАТАМИ ==================
