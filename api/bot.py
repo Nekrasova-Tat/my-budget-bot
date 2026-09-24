@@ -97,12 +97,14 @@ def state_sheet():
     return get_sheet().worksheet(SHEET_STATE)
 
 def get_state(chat_id):
-    """Читает состояние пользователя из листа 'Состояние'. Возвращает dict или None."""
     sh = state_sheet()
     all_rows = sh.get_all_values()
-    chat_id_str = str(chat_id)
-    for idx, row in enumerate(all_rows[1:], start=2):  # пропускаем заголовки
-        if row and row[0] == chat_id_str:
+    chat_id_str = str(chat_id).strip()
+    for idx, row in enumerate(all_rows[1:], start=2):
+        if not row:
+            continue
+        cell = str(row[0]).strip().replace("'", "")
+        if cell == chat_id_str:
             data_str = row[2] if len(row) > 2 else '{}'
             try:
                 data = json.loads(data_str) if data_str else {}
@@ -112,10 +114,18 @@ def get_state(chat_id):
     return None
 
 def save_state(chat_id, step, data):
-    """Сохраняет состояние пользователя. Если запись есть — обновляет, если нет — добавляет."""
     sh = state_sheet()
     chat_id_str = str(chat_id)
-    data_str = json.dumps(data, ensure_ascii=False)
+
+    # Преобразуем всё, что не сериализуется в JSON, в строку
+    safe_data = {}
+    for k, v in data.items():
+        if isinstance(v, (date, datetime)):
+            safe_data[k] = v.strftime('%Y-%m-%d')
+        else:
+            safe_data[k] = v
+
+    data_str = json.dumps(safe_data, ensure_ascii=False)
     existing = get_state(chat_id)
     if existing:
         sh.update(f'A{existing["row"]}:C{existing["row"]}', [[chat_id_str, step, data_str]])
@@ -123,7 +133,6 @@ def save_state(chat_id, step, data):
         sh.append_row([chat_id_str, step, data_str])
 
 def clear_state(chat_id):
-    """Удаляет строку с состоянием пользователя."""
     sh = state_sheet()
     existing = get_state(chat_id)
     if existing:
@@ -167,7 +176,6 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if data.startswith('type:'):
         t = data.split(':')[1]
         step_data = {'type': t}
-        save_state(chat_id, 'category', step_data)
         cats = get_categories(t)
         if not cats:
             await q.message.reply_text('❌ Нет категорий в таблице')
@@ -290,10 +298,8 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await start(update, ctx)
 
 async def finish(chat_id, message, step_data):
-    """Записывает данные в таблицу и очищает состояние."""
     try:
         user = message.from_user if hasattr(message, 'from_user') else None
-        # Если сообщение — это callback, берём пользователя из чата
         if user is None:
             user = type('User', (), {'id': chat_id, 'username': ''})()
         save_entry(user, step_data)
@@ -329,11 +335,11 @@ async def lifespan(app: FastAPI):
         allowed_updates=Update.ALL_TYPES
     )
     async with application:
-        await application.start()
+        awaitф application.start()
         yield
-        await application.stop()
+        await applicationов.stop()
 
-app = FastAPI(lifespan=lifespan)
+ —app = FastAPI(lifespan=lifes этоpan)
 
 @app.post("/api/bot")
 async def process_update(request: Request):
