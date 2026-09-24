@@ -1,1 +1,208 @@
+import os
+import json
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler,
+    MessageHandler, filters, ContextTypes
+)
+import gspread
+from google.oauth2.service_account import Credentials
 
+# ================== НАСТРОЙКИ ==================
+BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+# Вставьте сюда содержимое JSON-файла сервисного аккаунта Google
+CREDENTIALS_JSON = os.environ.get('GOOGLE_CREDENTIALS')
+
+SHEET_NAME = 'Бюджет'
+SHEET_EXPENSES = 'Расходы'
+SHEET_INCOMES = 'Доходы'
+SHEET_CATEGORIES = 'Категории'
+
+# ================== GOOGLE SHEETS ==================
+def get_sheet():
+    creds_dict = json.loads(CREDENTIALS_JSON)
+    scopes = [
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/drive'
+    ]
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    client = gspread.authorize(creds)
+    return client.open(SHEET_NAME)
+
+def type_to_sheet(t):
+    return 'Расход' if t == 'expense' else 'Доход'
+
+def get_categories(t):
+    sheet = get_sheet().worksheet(SHEET_CATEGORIES)
+    data = sheet.get_all_values()
+    sheet_type = type_to_sheet(t)
+    seen, result = set(), []
+    for row in data[1:]:
+        if len(row) < 2:
+            continue
+        row_type = row[0].strip()
+        cat = row[1].strip()
+        if row_type.lower() == sheet_type.lower() and cat and cat not in seen:
+            seen.add(cat)
+            result.append(cat)
+    return result
+
+def get_subcategories(t, category):
+    sheet = get_sheet().worksheet(SHEET_CATEGORIES)
+    data = sheet.get_all_values()
+    sheet_type = type_to_sheet(t)
+    result = []
+    for row in data[1:]:
+        if len(row) < 3:
+            continue
+        row_type = row[0].strip()
+        cat = row[1].strip()
+        sub = row[2].strip()
+        if (row_type.lower() == sheet_type.lower()
+                and cat == category
+                and sub and sub not in ('—', '-')):
+            result.append(sub)
+    return result
+
+def save_entry(user, state):
+    sheet_name = SHEET_EXPENSES if state['type'] == 'expense' else SHEET_INCOMES
+    ws = get_sheet().worksheet(sheet_name)
+    headers = ws.row_values(1)
+    data = {
+        'Telegram ID': user.id,
+        'Username': '@' + user.username if user.username else '',
+        'Дата': state.get('date', ''),
+        'Название': state.get('name', ''),
+        'Категория': state.get('category', ''),
+        'Подкатегория': state.get('subcategory', ''),
+        'Сумма': state.get('amount', ''),
+        'Комментарии': state.get('comment', '')
+    }
+    row = [str(data.get(h.strip(), '')) for h in headers]
+    ws.append_row(row)
+
+# ================== ЛОГИКА БОТА ==================
+async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    kb = [[
+        InlineKeyboardButton('➕ Расход', callback_data='type:expense'),
+        InlineKeyboardButton('💰 Доход', callback_data='type:income')
+    ]]
+    await update.message.reply_text('Что записываем?', reply_markup=InlineKeyboardMarkup(kb))
+
+async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    data = q.data
+
+    if data.startswith('type:'):
+        t = data.split(':')[1]
+        ctx.user_data.clear()
+        ctx.user_data['type'] = t
+        cats = get_categories(t)
+        if not cats:
+            await q.edit_message_text('❌ Нет категорий в таблице')
+            return
+        ctx.user_data['cats'] = cats
+        kb = [[InlineKeyboardButton(c, callback_data=f'cat:{i}')] for i, c in enumerate(cats)]
+        kb.append([InlineKeyboardButton('⬅️ Отмена', callback_data='menu')])
+        await q.edit_message_text('📂 Выберите категорию:', reply_markup=InlineKeyboardMarkup(kb))
+
+    elif data == 'menu':
+        ctx.user_data.clear()
+        kb = [[
+            InlineKeyboardButton('➕ Расход', callback_data='type:expense'),
+            InlineKeyboardButton('💰 Доход', callback_data='type:income')
+        ]]
+        await q.edit_message_text('Что записываем?', reply_markup=InlineKeyboardMarkup(kb))
+
+    elif data.startswith('cat:'):
+        idx = int(data.split(':')[1])
+        cat = ctx.user_data['cats'][idx]
+        ctx.user_data['category'] = cat
+        subs = get_subcategories(ctx.user_data['type'], cat)
+        if not subs:
+            ctx.user_data['subcategory'] = ''
+            await q.edit_message_text('📝 Введите название операции:')
+            ctx.user_data['step'] = 'name'
+        else:
+            ctx.user_data['subs'] = subs
+            kb = [[InlineKeyboardButton(s, callback_data=f'sub:{i}')] for i, s in enumerate(subs)]
+            kb.append([InlineKeyboardButton('⬅️ Отмена', callback_data='menu')])
+            await q.edit_message_text('📁 Выберите подкатегорию:', reply_markup=InlineKeyboardMarkup(kb))
+
+    elif data.startswith('sub:'):
+        idx = int(data.split(':')[1])
+        ctx.user_data['subcategory'] = ctx.user_data['subs'][idx]
+        ctx.user_data['step'] = 'name'
+        await q.edit_message_text('📝 Введите название операции:')
+
+    elif data == 'skip':
+        ctx.user_data['comment'] = ''
+        await finish(update, ctx)
+
+async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    step = ctx.user_data.get('step')
+    text = update.message.text.strip()
+
+    if step == 'name':
+        ctx.user_data['name'] = text
+        ctx.user_data['step'] = 'amount'
+        await update.message.reply_text('💰 Введите сумму:')
+
+    elif step == 'amount':
+        try:
+            amount = float(text.replace(',', '.').replace(' ', ''))
+        except ValueError:
+            await update.message.reply_text('❌ Нужно число. Попробуйте снова:')
+            return
+        ctx.user_data['amount'] = amount
+        ctx.user_data['step'] = 'comment'
+        kb = [[InlineKeyboardButton('⏭ Пропустить', callback_data='skip')]]
+        await update.message.reply_text('📝 Комментарий:', reply_markup=InlineKeyboardMarkup(kb))
+
+    elif step == 'comment':
+        ctx.user_data['comment'] = text
+        await finish(update, ctx)
+
+    else:
+        await start(update, ctx)
+
+async def finish(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    try:
+        save_entry(user, ctx.user_data)
+        t = '➖ Расход' if ctx.user_data['type'] == 'expense' else '➕ Доход'
+        msg = f"✅ Записано!\n\n{t}: {ctx.user_data.get('name', '')}"
+        msg += f"\n📂 {ctx.user_data.get('category', '')}"
+        if ctx.user_data.get('subcategory'):
+            msg += f" / {ctx.user_data['subcategory']}"
+        msg += f"\n💰 {ctx.user_data['amount']}"
+        if ctx.user_data.get('comment'):
+            msg += f"\n💬 {ctx.user_data['comment']}"
+    except Exception as e:
+        msg = f'❌ Ошибка: {e}'
+    ctx.user_data.clear()
+    kb = [[
+        InlineKeyboardButton('➕ Расход', callback_data='type:expense'),
+        InlineKeyboardButton('💰 Доход', callback_data='type:income')
+    ]]
+    if update.callback_query:
+        await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+    else:
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+
+# ================== ТОЧКА ВХОДА ДЛЯ VERCEL ==================
+app = Application.builder().token(BOT_TOKEN).build()
+app.add_handler(CommandHandler('start', start))
+app.add_handler(CallbackQueryHandler(on_callback))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+
+async def handler(request):
+    """HTTP-функция, которую вызывает Vercel."""
+    from telegram import Update as TGUpdate
+    body = await request.json()
+    update = TGUpdate.de_json(body, app.bot)
+    await app.initialize()
+    await app.process_update(update)
+    return {'status': 'ok'}
