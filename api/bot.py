@@ -117,7 +117,6 @@ def save_state(chat_id, step, data):
     sh = state_sheet()
     chat_id_str = str(chat_id)
 
-    # Преобразуем всё, что не сериализуется в JSON, в строку
     safe_data = {}
     for k, v in data.items():
         if isinstance(v, (date, datetime)):
@@ -337,9 +336,9 @@ async def lifespan(app: FastAPI):
     async with application:
         await application.start()
         yield
-        await applicationов.stop()
+        await application.stop()
 
- —app = FastAPI(lifespan=lifes этоpan)
+app = FastAPI(lifespan=lifespan)
 
 @app.post("/api/bot")
 async def process_update(request: Request):
