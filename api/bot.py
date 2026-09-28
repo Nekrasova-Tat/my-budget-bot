@@ -94,7 +94,6 @@ def save_entry(user, state):
         'Telegram ID': user.id,
         'Username': '@' + user.username if user.username else '',
         'Дата': date_value,
-        'Название': state.get('name', ''),
         'Категория': state.get('category', ''),
         'Подкатегория': state.get('subcategory', ''),
         'Сумма': state.get('amount', ''),
@@ -222,12 +221,8 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         subs = get_subcategories(step_data['type'], cat)
         if not subs:
             step_data['subcategory'] = ''
-            save_state(chat_id, 'name', step_data)
-            kb = [[InlineKeyboardButton('⏭ Пропустить', callback_data='skip_name')]]
-            await q.message.reply_text(
-                '📝 Введите название операции (или нажмите «Пропустить»):',
-                reply_markup=InlineKeyboardMarkup(kb)
-            )
+            save_state(chat_id, 'amount', step_data)
+            await q.message.reply_text('💰 Введите сумму:')
         else:
             step_data['subs'] = subs
             save_state(chat_id, 'subcategory', step_data)
@@ -238,15 +233,6 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data.startswith('sub:'):
         idx = int(data.split(':')[1])
         step_data['subcategory'] = step_data['subs'][idx]
-        save_state(chat_id, 'name', step_data)
-        kb = [[InlineKeyboardButton('⏭ Пропустить', callback_data='skip_name')]]
-        await q.message.reply_text(
-            '📝 Введите название операции (или нажмите «Пропустить»):',
-            reply_markup=InlineKeyboardMarkup(kb)
-        )
-
-    elif data == 'skip_name':
-        step_data['name'] = ''
         save_state(chat_id, 'amount', step_data)
         await q.message.reply_text('💰 Введите сумму:')
 
@@ -279,12 +265,7 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     step_data = state['data']
     text = update.message.text.strip()
 
-    if step == 'name':
-        step_data['name'] = text
-        save_state(chat_id, 'amount', step_data)
-        await update.message.reply_text('💰 Введите сумму:')
-
-    elif step == 'amount':
+    if step == 'amount':
         try:
             amount = float(text.replace(',', '.').replace(' ', ''))
         except ValueError:
@@ -325,7 +306,7 @@ async def finish(chat_id, message, step_data):
             user = type('User', (), {'id': chat_id, 'username': ''})()
         save_entry(user, step_data)
         t = '➖ Расход' if step_data['type'] == 'expense' else '➕ Доход'
-        msg = f"✅ Записано!\n\n{t}: {step_data.get('name', '') or '—'}"
+        msg = f"✅ Записано!\n\n{t}"
         msg += f"\n📂 {step_data.get('category', '')}"
         if step_data.get('subcategory'):
             msg += f" / {step_data['subcategory']}"
