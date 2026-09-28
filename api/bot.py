@@ -251,7 +251,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data == 'skip':
         step_data['comment'] = ''
-        await finish(chat_id, q.message, step_data)
+        await finish(chat_id, q.from_user, step_data)
 
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -294,16 +294,13 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif step == 'comment':
         step_data['comment'] = text
-        await finish(chat_id, update.message, step_data)
+        await finish(chat_id, update.effective_user, step_data)
 
     else:
         await start(update, ctx)
 
-async def finish(chat_id, message, step_data):
+async def finish(chat_id, user, step_data):
     try:
-        user = message.from_user if hasattr(message, 'from_user') else None
-        if user is None:
-            user = type('User', (), {'id': chat_id, 'username': ''})()
         save_entry(user, step_data)
         t = '➖ Расход' if step_data['type'] == 'expense' else '➕ Доход'
         msg = f"✅ Записано!\n\n{t}"
@@ -322,7 +319,11 @@ async def finish(chat_id, message, step_data):
         InlineKeyboardButton('➕ Расход', callback_data='type:expense'),
         InlineKeyboardButton('💰 Доход', callback_data='type:income')
     ]]
-    await message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+    await application.bot.send_message(
+        chat_id=chat_id,
+        text=msg,
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
 
 # ================== FASTAPI ОБЁРТКА ==================
 application = Application.builder().token(BOT_TOKEN).updater(None).build()
