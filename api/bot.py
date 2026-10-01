@@ -174,15 +174,18 @@ def date_keyboard():
     rows.append([InlineKeyboardButton('✍️ Ввести вручную', callback_data='date:manual')])
     return InlineKeyboardMarkup(rows)
 
+# ================== ГЛАВНОЕ МЕНЮ ==================
+def main_menu():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton('➕ Расход', callback_data='type:expense'),
+        InlineKeyboardButton('💰 Доход', callback_data='type:income')
+    ]])
+
 # ================== ЛОГИКА БОТА ==================
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     clear_state(chat_id)
-    kb = [[
-        InlineKeyboardButton('➕ Расход', callback_data='type:expense'),
-        InlineKeyboardButton('💰 Доход', callback_data='type:income')
-    ]]
-    await update.message.reply_text('Что записываем?', reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text('Что записываем?', reply_markup=main_menu())
 
 async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -208,13 +211,13 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data == 'menu':
         clear_state(chat_id)
-        kb = [[
-            InlineKeyboardButton('➕ Расход', callback_data='type:expense'),
-            InlineKeyboardButton('💰 Доход', callback_data='type:income')
-        ]]
-        await q.message.reply_text('Что записываем?', reply_markup=InlineKeyboardMarkup(kb))
+        await q.message.reply_text('Что записываем?', reply_markup=main_menu())
 
     elif data.startswith('cat:'):
+        if 'cats' not in step_data:
+            await q.message.reply_text('⚠️ Данные потерялись, начните заново:', reply_markup=main_menu())
+            clear_state(chat_id)
+            return
         idx = int(data.split(':')[1])
         cat = step_data['cats'][idx]
         step_data['category'] = cat
@@ -231,6 +234,10 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.message.reply_text('📁 Выберите подкатегорию:', reply_markup=InlineKeyboardMarkup(kb))
 
     elif data.startswith('sub:'):
+        if 'subs' not in step_data:
+            await q.message.reply_text('⚠️ Данные потерялись, начните заново:', reply_markup=main_menu())
+            clear_state(chat_id)
+            return
         idx = int(data.split(':')[1])
         step_data['subcategory'] = step_data['subs'][idx]
         save_state(chat_id, 'amount', step_data)
@@ -300,6 +307,16 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await start(update, ctx)
 
 async def finish(chat_id, user, step_data):
+    # Проверяем обязательные поля
+    if not step_data or 'type' not in step_data or 'amount' not in step_data:
+        clear_state(chat_id)
+        await application.bot.send_message(
+            chat_id=chat_id,
+            text='⚠️ Данные потерялись, начните заново:',
+            reply_markup=main_menu()
+        )
+        return
+
     try:
         save_entry(user, step_data)
         t = '➖ Расход' if step_data['type'] == 'expense' else '➕ Доход'
@@ -315,14 +332,10 @@ async def finish(chat_id, user, step_data):
         msg = f'❌ Ошибка: {e}'
 
     clear_state(chat_id)
-    kb = [[
-        InlineKeyboardButton('➕ Расход', callback_data='type:expense'),
-        InlineKeyboardButton('💰 Доход', callback_data='type:income')
-    ]]
     await application.bot.send_message(
         chat_id=chat_id,
         text=msg,
-        reply_markup=InlineKeyboardMarkup(kb)
+        reply_markup=main_menu()
     )
 
 # ================== FASTAPI ОБЁРТКА ==================
